@@ -59,6 +59,3 @@ The ESP must be on the **same network as Home Assistant** and only reports while
 
 - Original firmware and CAN decoding: [SAM0-0/ATHER-OBD-READER](https://github.com/SAM0-0/ATHER-OBD-READER)
 
-## License
-
-Add a license of your choice (MIT is common). Check the license of the original repository and keep its attribution requirements.
