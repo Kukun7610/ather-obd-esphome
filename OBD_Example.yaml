@@ -1,0 +1,281 @@
+# Board: Generic ESP32-C3 Board (Generic)
+# Definition: definitions/boards/generic-esp32c3/manifest.yaml
+
+substitutions:
+  name: ather-obd
+  friendly_name: Ather OBD
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+# GPIO20 is the default UART0 RX pin on the C3, and we use it for CAN RX.
+# Move the logger to the USB serial port so the two don't clash.
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: "XXXXXXXXXXXXXXXXXXXXXXXXXXX"
+ota:
+  - platform: esphome
+    
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fallback hotspot if home WiFi isn't found (for re-configuring)
+  ap:
+    ssid: "Ather-OBD Fallback"
+    password: "12345678"
+
+# ---------------------------------------------------------------------------
+# CAN bus (500 kbit/s, TX=GPIO10, RX=GPIO20, same as the original sketch)
+# LISTENONLY = never transmits or ACKs, safest for sniffing your own scooter.
+# If you get no frames, try mode: NORMAL (the original sketch used NORMAL).
+# ---------------------------------------------------------------------------
+canbus:
+  - platform: esp32_can
+    id: scooter_can
+    tx_pin: GPIO10
+    rx_pin: GPIO20
+    can_id: 4
+    bit_rate: 500KBPS
+    mode: LISTENONLY
+    rx_queue_len: 128
+    on_frame:
+      # ---- Battery ----
+      - can_id: 0x131
+        then:
+          - lambda: |-
+              if (x.size() < 6) return;
+              id(soc).publish_state((x[4] | (x[5] << 8)) / 100.0f);
+              id(balancing).publish_state((x[2] >> 4) & 1);
+      - can_id: 0x14D
+        then:
+          - lambda: |-
+              if (x.size() < 6) return;
+              id(soh).publish_state((x[4] | (x[5] << 8)) / 100.0f);
+      - can_id: 0x13D
+        then:
+          - lambda: |-
+              if (x.size() < 6) return;
+              id(delta_soc).publish_state((x[4] | (x[5] << 8)) / 100.0f);
+      - can_id: 0x141
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              id(pack_voltage).publish_state((x[0] | (x[1] << 8)) / 100.0f);
+              id(imbalance).publish_state((x[2] | (x[3] << 8)) / 10000.0f);
+
+      # ---- Cluster / drive ----
+      - can_id: 0x200
+        then:
+          - lambda: |-
+              if (x.size() < 7) return;
+              id(range_km).publish_state(x[6]);
+      - can_id: 0x510
+        then:
+          - lambda: |-
+              if (x.size() < 4) return;
+              int16_t raw = (int16_t)(x[2] | (x[3] << 8));
+              id(rpm).publish_state(raw * 5.0f / 6.0f);
+      - can_id: 0x101
+        then:
+          - lambda: |-
+              if (x.size() < 2) return;
+              const char *s = "UNKNOWN";
+              switch (x[1]) {
+                case 1: s = "SPORTS"; break;
+                case 2: s = "DRIVE"; break;
+                case 3: s = "ECO"; break;
+                case 6: s = "WARP"; break;
+                case 8: s = "S. ECO"; break;
+              }
+              if (id(drive_mode).state != s) id(drive_mode).publish_state(s);
+
+      # ---- Switches (binary sensors only publish on change) ----
+      - can_id: 0x102
+        then:
+          - lambda: |-
+              if (x.size() < 5) return;
+              id(b_front_brake).publish_state((x[0] >> 0) & 1);
+              id(b_rear_brake).publish_state((x[0] >> 1) & 1);
+              id(b_high_beam).publish_state((x[0] >> 2) & 1);
+              id(b_start).publish_state((x[0] >> 4) & 1);
+              id(b_kill).publish_state((x[0] >> 5) & 1);
+              id(b_storage).publish_state((x[0] >> 6) & 1);
+              id(b_horn).publish_state((x[1] >> 1) & 1);
+              id(b_ind_left).publish_state((x[2] >> 0) & 1);
+              id(b_ind_right).publish_state((x[2] >> 1) & 1);
+              id(b_ind_center).publish_state((x[2] >> 2) & 1);
+              id(b_side_stand).publish_state(x[4] & 1);
+              id(b_key).publish_state((x[4] >> 3) & 1);
+
+      # ---- Cell voltages ----
+      - can_id: 0x132
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              id(cv1).publish_state((x[0] | (x[1] << 8)) / 10000.0f);
+              id(cv2).publish_state((x[2] | (x[3] << 8)) / 10000.0f);
+              id(cv3).publish_state((x[4] | (x[5] << 8)) / 10000.0f);
+              id(cv4).publish_state((x[6] | (x[7] << 8)) / 10000.0f);
+      - can_id: 0x133
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              id(cv5).publish_state((x[0] | (x[1] << 8)) / 10000.0f);
+              id(cv6).publish_state((x[2] | (x[3] << 8)) / 10000.0f);
+              id(cv7).publish_state((x[4] | (x[5] << 8)) / 10000.0f);
+              id(cv8).publish_state((x[6] | (x[7] << 8)) / 10000.0f);
+      - can_id: 0x134
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              id(cv9).publish_state((x[0] | (x[1] << 8)) / 10000.0f);
+              id(cv10).publish_state((x[2] | (x[3] << 8)) / 10000.0f);
+              id(cv11).publish_state((x[4] | (x[5] << 8)) / 10000.0f);
+              id(cv12).publish_state((x[6] | (x[7] << 8)) / 10000.0f);
+      - can_id: 0x135
+        then:
+          - lambda: |-
+              if (x.size() < 4) return;
+              id(cv13).publish_state((x[0] | (x[1] << 8)) / 10000.0f);
+              id(cv14).publish_state((x[2] | (x[3] << 8)) / 10000.0f);
+
+      # ---- Cell SoH ----
+      - can_id: 0x14e
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              id(cs1).publish_state(x[0]);
+              id(cs2).publish_state(x[1]);
+              id(cs3).publish_state(x[2]);
+              id(cs4).publish_state(x[3]);
+              id(cs5).publish_state(x[4]);
+              id(cs6).publish_state(x[5]);
+              id(cs7).publish_state(x[6]);
+              id(cs8).publish_state(x[7]);
+      - can_id: 0x14f
+        then:
+          - lambda: |-
+              if (x.size() < 6) return;
+              id(cs9).publish_state(x[0]);
+              id(cs10).publish_state(x[1]);
+              id(cs11).publish_state(x[2]);
+              id(cs12).publish_state(x[3]);
+              id(cs13).publish_state(x[4]);
+              id(cs14).publish_state(x[5]);
+
+      # ---- Charger (values are in mV / mA) ----
+      - can_id: 0x201
+        then:
+          - lambda: |-
+              if (x.size() < 8) return;
+              uint32_t ov = (uint32_t) x[0] | ((uint32_t) x[1] << 8) | ((uint32_t) x[2] << 16) | ((uint32_t) x[3] << 24);
+              uint32_t oi = (uint32_t) x[4] | ((uint32_t) x[5] << 8) | ((uint32_t) x[6] << 16) | ((uint32_t) x[7] << 24);
+              id(chg_out_v).publish_state(ov / 1000.0f);
+              id(chg_out_i).publish_state(oi / 1000.0f);
+      - can_id: 0x203
+        then:
+          - lambda: |-
+              if (x.size() < 4) return;
+              uint32_t iv = (uint32_t) x[0] | ((uint32_t) x[1] << 8) | ((uint32_t) x[2] << 16) | ((uint32_t) x[3] << 24);
+              id(chg_in_v).publish_state(iv / 1000.0f);
+
+      # ---- Motor controller ----
+      - can_id: 0x18c
+        then:
+          - lambda: |-
+              if (x.size() < 5) return;
+              int cur = ((x[2] >> 5) | ((x[3] & 31) << 3))
+                        + ((((x[3] >> 5) | ((x[4] & 31) << 3)) & 1) * 256)
+                        - (((x[3] >> 5) & 1) * 512);
+              int temp = (((x[4] & 63) << 2) | (x[3] >> 6)) - 40;
+              id(motor_current).publish_state(cur / 10.0f);
+              id(motor_temp).publish_state(temp);
+
+# ---------------------------------------------------------------------------
+# Sensors (throttled so Home Assistant isn't flooded)
+# ---------------------------------------------------------------------------
+sensor:
+  - {platform: template, id: soc, name: "SoC", unit_of_measurement: "%", device_class: battery, state_class: measurement, accuracy_decimals: 2, filters: [{throttle: 2s}]}
+  - {platform: template, id: soh, name: "SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 2, icon: "mdi:battery-heart-variant", filters: [{throttle: 60s}]}
+  - {platform: template, id: delta_soc, name: "Delta SoC", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 2, filters: [{throttle: 10s}]}
+  - {platform: template, id: pack_voltage, name: "Pack Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 2, filters: [{throttle: 2s}]}
+  - {platform: template, id: imbalance, name: "Voltage Imbalance", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 4, filters: [{throttle: 5s}]}
+  - {platform: template, id: rpm, name: "Motor RPM", unit_of_measurement: rpm, state_class: measurement, accuracy_decimals: 0, icon: "mdi:engine", filters: [{throttle: 1s}]}
+  - {platform: template, id: range_km, name: "Range", unit_of_measurement: km, device_class: distance, state_class: measurement, accuracy_decimals: 0, filters: [{throttle: 5s}]}
+  - {platform: template, id: motor_current, name: "Battery Current", unit_of_measurement: A, device_class: current, state_class: measurement, accuracy_decimals: 1, filters: [{throttle: 1s}]}
+  - {platform: template, id: motor_temp, name: "Motor Temperature", unit_of_measurement: "°C", device_class: temperature, state_class: measurement, accuracy_decimals: 0, filters: [{throttle: 10s}]}
+
+  - {platform: template, id: chg_out_v, name: "Charger Output Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 2, filters: [{throttle: 2s}]}
+  - {platform: template, id: chg_out_i, name: "Charger Output Current", unit_of_measurement: A, device_class: current, state_class: measurement, accuracy_decimals: 2, filters: [{throttle: 2s}]}
+  - {platform: template, id: chg_in_v, name: "Charger Input Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 1, filters: [{throttle: 5s}]}
+  - platform: template
+    id: chg_power
+    name: "Charger Power"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 2s
+    lambda: |-
+      return id(chg_out_v).state * id(chg_out_i).state;
+
+  # Cell voltages
+  - {platform: template, id: cv1,  name: "Cell 1 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv2,  name: "Cell 2 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv3,  name: "Cell 3 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv4,  name: "Cell 4 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv5,  name: "Cell 5 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv6,  name: "Cell 6 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv7,  name: "Cell 7 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv8,  name: "Cell 8 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv9,  name: "Cell 9 Voltage",  unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv10, name: "Cell 10 Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv11, name: "Cell 11 Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv12, name: "Cell 12 Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv13, name: "Cell 13 Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+  - {platform: template, id: cv14, name: "Cell 14 Voltage", unit_of_measurement: V, device_class: voltage, state_class: measurement, accuracy_decimals: 3, entity_category: diagnostic, filters: [{throttle: 5s}]}
+
+  # Cell SoH (changes very slowly, so throttled hard)
+  - {platform: template, id: cs1,  name: "Cell 1 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs2,  name: "Cell 2 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs3,  name: "Cell 3 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs4,  name: "Cell 4 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs5,  name: "Cell 5 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs6,  name: "Cell 6 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs7,  name: "Cell 7 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs8,  name: "Cell 8 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs9,  name: "Cell 9 SoH",  unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs10, name: "Cell 10 SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs11, name: "Cell 11 SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs12, name: "Cell 12 SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs13, name: "Cell 13 SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+  - {platform: template, id: cs14, name: "Cell 14 SoH", unit_of_measurement: "%", state_class: measurement, accuracy_decimals: 0, entity_category: diagnostic, filters: [{throttle: 300s}]}
+
+text_sensor:
+  - {platform: template, id: drive_mode, name: "Drive Mode", icon: "mdi:speedometer"}
+
+binary_sensor:
+  - {platform: template, id: b_key,         name: "Key On"}
+  - {platform: template, id: b_start,       name: "Start Switch"}
+  - {platform: template, id: b_front_brake, name: "Front Brake"}
+  - {platform: template, id: b_rear_brake,  name: "Rear Brake"}
+  - {platform: template, id: b_high_beam,   name: "High Beam"}
+  - {platform: template, id: b_horn,        name: "Horn"}
+  - {platform: template, id: b_ind_left,    name: "Indicator Left"}
+  - {platform: template, id: b_ind_right,   name: "Indicator Right"}
+  - {platform: template, id: b_ind_center,  name: "Indicator Center"}
+  - {platform: template, id: b_kill,        name: "Kill Switch"}
+  - {platform: template, id: b_storage,     name: "Storage Switch"}
+  - {platform: template, id: b_side_stand,  name: "Side Stand Down"}
+  - {platform: template, id: balancing,     name: "Cell Balancing", entity_category: diagnostic}
